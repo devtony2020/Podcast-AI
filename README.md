@@ -27,3 +27,4 @@ From automated transcriptions to blog generation, clip creation, and metadata ma
   Works flawlessly across all devices — desktop, tablet, or mobile.
 
 ---
+## 🎬 Live Demo
