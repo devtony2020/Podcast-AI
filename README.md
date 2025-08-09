@@ -13,3 +13,6 @@ From automated transcriptions to blog generation, clip creation, and metadata ma
 
 - 📝 **AI-Generated Blog Posts**  
   Get high-quality, SEO-friendly blog content generated automatically from your episodes.
+
+- 🔒 **Secure Backend Architecture**  
+  Keep API keys and sensitive data safe on the server — never exposed on the frontend.
