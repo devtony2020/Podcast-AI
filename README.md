@@ -7,3 +7,5 @@ From automated transcriptions to blog generation, clip creation, and metadata ma
 ## 🌟 Features
 - 🎤 **Automated Transcriptions**  
   Convert your podcast audio and video into accurate, searchable text with ease.
+- 🎞️ **Engaging Short Clips**  
+  Create attention-grabbing short clips perfect for social media sharing and audience growth.
