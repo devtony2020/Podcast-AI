@@ -19,3 +19,6 @@ From automated transcriptions to blog generation, clip creation, and metadata ma
 
 - 🔄 **Modular AI Integration**  
   Easily swap or upgrade AI models and services without disrupting the system.
+
+- 🌙 **Dark Mode Friendly UI**  
+  Comfortable working day or night with stylish light/dark themes.
