@@ -29,4 +29,5 @@ From automated transcriptions to blog generation, clip creation, and metadata ma
 ---
 ## 🎬 Live Demo
 
-Try PodcastAI in action:  
+Try PodcastAI in action: 
+🔗 [Live Demo Coming Soon!](#) 
