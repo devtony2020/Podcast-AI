@@ -33,3 +33,4 @@ Try PodcastAI in action:
 🔗 [Live Demo Coming Soon!](#) 
 
 ---
+## 🖼️ Screenshots
