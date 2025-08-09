@@ -26,4 +26,4 @@ From automated transcriptions to blog generation, clip creation, and metadata ma
 - 📱 **Fully Responsive Design**  
   Works flawlessly across all devices — desktop, tablet, or mobile.
 
-  ---
+---
