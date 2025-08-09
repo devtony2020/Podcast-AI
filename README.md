@@ -16,3 +16,6 @@ From automated transcriptions to blog generation, clip creation, and metadata ma
 
 - 🔒 **Secure Backend Architecture**  
   Keep API keys and sensitive data safe on the server — never exposed on the frontend.
+
+- 🔄 **Modular AI Integration**  
+  Easily swap or upgrade AI models and services without disrupting the system.
