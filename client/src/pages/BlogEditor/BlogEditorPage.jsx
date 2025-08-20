@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import Sidebar from '../../components/Sidebar/Sidebar';
 import { 
   FaSave, 
@@ -19,12 +19,16 @@ import {
   FaRedo,
   FaEdit,
   FaTimes,
-  FaHome
+  FaHome,
+  FaExclamationCircle
 } from 'react-icons/fa';
+import { databases, DATABASE_ID, COLLECTIONS } from '../../lib/appwrite';
+import axios from 'axios';
 import './blogeditor.css';
 
 const BlogEditor = () => {
   const navigate = useNavigate();
+  const { episodeId } = useParams();
   const [content, setContent] = useState('');
   const [title, setTitle] = useState('');
   const [keywords, setKeywords] = useState([]);
@@ -36,51 +40,68 @@ const BlogEditor = () => {
   const [wordCount, setWordCount] = useState(0);
   const [charCount, setCharCount] = useState(0);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
-  // Load transcription from localStorage
+  // Load data from backend or localStorage with default fallback
   useEffect(() => {
-    const savedProject = JSON.parse(localStorage.getItem('currentProject') || '{}');
-    if (savedProject.transcription) {
-      setContent(savedProject.transcription);
-      if (savedProject.title) setTitle(savedProject.title);
-      if (savedProject.keywords) setKeywords(savedProject.keywords);
-    }
-  }, []);
+    const loadData = async () => {
+      setLoading(true);
+      setError('');
+      try {
+        const savedProject = JSON.parse(localStorage.getItem('currentProject') || '{}');
+        const currentEpisodeId = episodeId || savedProject.episodeId;
 
-  // Auto-generate title from first sentence of transcription
-  useEffect(() => {
-    if (content && !title) {
-      const firstSentence = content.split('.')[0];
-      if (firstSentence.length > 10 && firstSentence.length < 60) {
-        setTitle(firstSentence);
+        if (currentEpisodeId) {
+          try {
+            const response = await axios.get(`${import.meta.env.VITE_BACKEND_URL}/get-data/${currentEpisodeId}`);
+            const { blog } = response.data;
+            if (blog && Object.keys(blog).length > 0) {
+              setTitle(blog.seo_title || '');
+              setContent(blog.blog_content || '');
+              setKeywords(blog.tags || []);
+            }
+          } catch (fetchErr) {
+            setError(`Backend fetch failed: ${fetchErr.message}. Using local data or default.`);
+          }
+        }
+
+        // Fallback to localStorage or default
+        if (!content && savedProject.transcription) {
+          setContent(savedProject.transcription);
+          setTitle(savedProject.title || (savedProject.transcription.split('.')[0].trim().length > 10 && savedProject.transcription.split('.')[0].trim().length < 60 ? savedProject.transcription.split('.')[0].trim() : 'New Blog Post'));
+          setKeywords(savedProject.keywords || ['podcast', 'episode']);
+        } else if (!content) {
+          setContent('Start your blog post here...');
+          setTitle('New Blog Post');
+          setKeywords(['podcast', 'episode']);
+        }
+      } catch (err) {
+        setError(`Error loading data: ${err.message}. Starting with default editor.`);
+        setContent('Start your blog post here...');
+        setTitle('New Blog Post');
+        setKeywords(['podcast', 'episode']);
+      } finally {
+        setLoading(false);
       }
-    }
-  }, [content, title]);
+    };
 
-  // Auto-extract keywords from transcription
-  useEffect(() => {
-    if (content && keywords.length < 3) {
-      const words = content.toLowerCase().split(/\s+/);
-      const potentialKeywords = ['podcast', 'episode', 'discussion', ...words]
-        .filter(word => word.length > 3)
-        .filter((word, i, arr) => arr.indexOf(word) === i)
-        .slice(0, 5);
-      setKeywords(potentialKeywords);
-    }
-  }, [content, keywords]);
+    loadData();
+  }, [episodeId]);
 
   // Update word and character counts
   useEffect(() => {
     const words = content.split(/\s+/).filter(word => word.length > 0);
     setWordCount(words.length);
     setCharCount(content.length);
+    updateSeoScore();
   }, [content]);
 
   const updateSeoScore = () => {
     const score = Math.min(100, 
-      (title.length > 10 ? 20 : title.length * 2) + 
+      (title.length > 10 && title.length <= 60 ? 20 : Math.max(0, title.length * 0.33)) + 
       (keywords.length * 5) + 
-      (content.length > 300 ? 30 : content.length / 10) +
+      (wordCount >= 300 ? 30 : Math.min(30, wordCount / 10)) +
       (content.includes(keywords[0] || '') ? 15 : 0)
     );
     setSeoScore(Math.round(score));
@@ -90,25 +111,40 @@ const BlogEditor = () => {
     updateSeoScore();
   }, [title, content, keywords]);
 
-  const generateAIBlog = () => {
+  const generateAIBlog = async () => {
     setIsGenerating(true);
-    // Simulate AI processing delay
-    setTimeout(() => {
-      const aiGeneratedContent = `# ${title}\n\nIn this episode, we discuss ${keywords.join(', ')}. \n\n${content.substring(0, 500)}\n\n## Key Takeaways\n\n[AI-generated insights and summary would appear here]`;
+    try {
+      if (episodeId) {
+        const response = await axios.get(`${import.meta.env.VITE_BACKEND_URL}/enhance-blog/${episodeId}`);
+        if (response.data.success) {
+          const updatedResponse = await axios.get(`${import.meta.env.VITE_BACKEND_URL}/get-data/${episodeId}`);
+          const { blog } = updatedResponse.data;
+          setContent(blog.blog_content || content);
+          setTitle(blog.seo_title || title);
+          setKeywords(blog.tags || keywords);
+        }
+      }
+    } catch (err) {
+      setError(`AI enhancement failed: ${err.message}. Using simulation.`);
+      const aiGeneratedContent = `# ${title || 'Generated Title'}\n\nIn this episode, we discuss ${keywords.join(', ') || 'various topics'}. \n\n${content.substring(0, 500) || 'Your content here'}\n\n## Key Takeaways\n\n[AI-generated insights will appear once OpenAI is active]`;
       setContent(aiGeneratedContent);
+    } finally {
       setIsGenerating(false);
-    }, 2000);
-  };
-
-  const handleAddKeyword = () => {
-    if (newKeyword.trim() && !keywords.includes(newKeyword.toLowerCase())) {
-      setKeywords([...keywords, newKeyword.toLowerCase()]);
-      setNewKeyword('');
     }
   };
 
-  const saveDraft = () => {
+  const handleAddKeyword = () => {
+    if (newKeyword.trim() && !keywords.includes(newKeyword.toLowerCase()) && keywords.length < 10) {
+      setKeywords([...keywords, newKeyword.toLowerCase()]);
+      setNewKeyword('');
+    } else if (keywords.length >= 10) {
+      setError('Maximum 10 keywords allowed.');
+    }
+  };
+
+  const saveDraft = async () => {
     const projectData = {
+      episodeId: episodeId || JSON.parse(localStorage.getItem('currentProject') || '{}').episodeId,
       title,
       content,
       keywords,
@@ -117,22 +153,65 @@ const BlogEditor = () => {
       lastSaved: new Date().toISOString()
     };
     localStorage.setItem('currentProject', JSON.stringify(projectData));
-    alert('Draft saved successfully!');
+
+    try {
+      if (episodeId) {
+        const response = await databases.listDocuments(DATABASE_ID, COLLECTIONS.BLOG_POSTS, [`equal("episode_id", "${episodeId}")`]);
+        const blogDocument = response.documents[0];
+
+        if (blogDocument) {
+          await databases.updateDocument(DATABASE_ID, COLLECTIONS.BLOG_POSTS, blogDocument.$id, {
+            seo_title: title,
+            blog_content: content,
+            tags: keywords,
+          });
+        } else {
+          await databases.createDocument(DATABASE_ID, COLLECTIONS.BLOG_POSTS, ID.unique(), {
+            episode_id: episodeId,
+            seo_title: title,
+            blog_content: content,
+            tags: keywords,
+          });
+        }
+      }
+      alert('Draft saved successfully!');
+    } catch (err) {
+      setError(`Failed to save to database: ${err.message}. Saved locally.`);
+    }
   };
 
   const continueToMetadata = () => {
     saveDraft();
-    navigate('/metadata');
+    if (!error) navigate('/metadata');
   };
 
   const formatText = (command, value = null) => {
     document.execCommand(command, false, value);
+    setContent(document.getElementById('editor').innerHTML);
     document.getElementById('editor').focus();
   };
 
+  if (loading) {
+    return (
+      <div className="blog-editor-container loading">
+        <FaSpinner className="spinner" size={48} />
+        <p>Loading blog data...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="blog-editor-container error">
+        <FaExclamationCircle size={48} />
+        <p>{error}</p>
+        <button onClick={() => setError('')} className="dismiss-error"><FaTimes /></button>
+      </div>
+    );
+  }
+
   return (
     <div className="blog-editor-container">
-      {/* Header with left title and right menu button */}
       <header className="mobile-header">
         <div className="header-content">
           <div className="navbar-title">

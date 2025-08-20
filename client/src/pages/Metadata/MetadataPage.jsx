@@ -15,6 +15,9 @@ import {
   FaTags,
   FaTimes
 } from 'react-icons/fa';
+import { ID } from 'appwrite';
+import { databases, DATABASE_ID, COLLECTIONS } from '../../lib/appwrite';
+import axios from 'axios';
 import './metadata.css';
 
 const Metadata = () => {
@@ -27,33 +30,61 @@ const Metadata = () => {
   const [seoScore, setSeoScore] = useState(0);
   const [suggestedTags, setSuggestedTags] = useState([]);
   const [isSaved, setIsSaved] = useState(false);
+  const [error, setError] = useState('');
+  const [episodeId, setEpisodeId] = useState('');
 
-  // Load saved data
+  // Load or initialize metadata
   useEffect(() => {
-    const savedProject = JSON.parse(localStorage.getItem('currentProject')) || {};
-    if (savedProject.metadata) {
-      setTitle(savedProject.metadata.title || '');
-      setDescription(savedProject.metadata.description || '');
-      setTags(savedProject.metadata.tags || []);
-    } else if (savedProject.title) {
-      setTitle(savedProject.title);
-      setDescription(`Listen to this podcast episode about ${savedProject.keywords?.join(', ') || 'interesting topics'}. ${savedProject.content?.substring(0, 100) || ''}...`);
-      setTags(savedProject.keywords || []);
+    const savedProject = JSON.parse(localStorage.getItem('currentProject') || '{}');
+    const currentEpisodeId = savedProject.episodeId;
+
+    if (currentEpisodeId) {
+      setEpisodeId(currentEpisodeId);
+      // Attempt to fetch from backend
+      axios.get(`${import.meta.env.VITE_BACKEND_URL}/get-data/${currentEpisodeId}`)
+        .then(response => {
+          const { metadata } = response.data;
+          if (metadata && Object.keys(metadata).length > 0) {
+            setTitle(metadata.title || '');
+            setDescription(metadata.description || '');
+            setTags(metadata.tags || []);
+          } else {
+            // Fallback to localStorage
+            setTitle(savedProject.title || 'New Podcast Episode');
+            setDescription(savedProject.description || 'Discover this exciting new podcast episode...');
+            setTags(savedProject.tags || savedProject.keywords || ['podcast']);
+          }
+        })
+        .catch(err => {
+          setError(`Backend fetch failed: ${err.message}. Using local defaults.`);
+          setTitle(savedProject.title || 'New Podcast Episode');
+          setDescription(savedProject.description || 'Discover this exciting new podcast episode...');
+          setTags(savedProject.tags || savedProject.keywords || ['podcast']);
+        });
+    } else {
+      // New session: generate temporary episodeId and default values
+      const tempEpisodeId = ID.unique();
+      setEpisodeId(tempEpisodeId);
+      setTitle('New Podcast Episode');
+      setDescription('Discover this exciting new podcast episode...');
+      setTags(['podcast']);
     }
 
+    // Set suggested tags
     setSuggestedTags([
-      'podcast',
       'content creation',
-      ...(tags.length > 0 ? [] : ['seo', 'blogging', 'audio content'])
+      'seo',
+      'blogging',
+      'audio content'
     ].filter(tag => !tags.includes(tag)));
-  }, [tags]);
+  }, []);
 
   // Calculate SEO score
   useEffect(() => {
     const score = Math.min(100, 
-      (title.length > 10 && title.length <= 60 ? 30 : title.length * 0.5) +
-      (description.length > 50 && description.length <= 160 ? 30 : description.length * 0.2) +
-      (tags.length >= 3 ? 20 : tags.length * 5) +
+      (title.length > 10 && title.length <= 60 ? 30 : Math.max(0, title.length * 0.5)) +
+      (description.length > 50 && description.length <= 160 ? 30 : Math.max(0, description.length * 0.2)) +
+      (tags.length >= 3 ? 20 : Math.min(20, tags.length * 5)) +
       (tags.some(tag => title.includes(tag)) ? 10 : 0) +
       (tags.some(tag => description.includes(tag)) ? 10 : 0)
     );
@@ -61,7 +92,7 @@ const Metadata = () => {
   }, [title, description, tags]);
 
   const addTag = (e) => {
-    if ((e.key === 'Enter' || e.type === 'click') && tagInput.trim() && !tags.includes(tagInput.trim().toLowerCase())) {
+    if ((e.key === 'Enter' || e.type === 'click') && tagInput.trim() && !tags.includes(tagInput.trim().toLowerCase()) && tags.length < 10) {
       setTags([...tags, tagInput.trim().toLowerCase()]);
       setTagInput('');
       setSuggestedTags(suggestedTags.filter(tag => tag !== tagInput.trim().toLowerCase()));
@@ -70,36 +101,66 @@ const Metadata = () => {
 
   const removeTag = (tagToRemove) => {
     setTags(tags.filter(tag => tag !== tagToRemove));
+    setSuggestedTags([...suggestedTags, tagToRemove].filter(tag => !tags.includes(tag)));
   };
 
   const addSuggestedTag = (tag) => {
-    if (!tags.includes(tag)) {
+    if (!tags.includes(tag) && tags.length < 10) {
       setTags([...tags, tag]);
       setSuggestedTags(suggestedTags.filter(t => t !== tag));
     }
   };
 
-  const saveMetadata = () => {
-    const projectData = JSON.parse(localStorage.getItem('currentProject')) || {};
-    projectData.metadata = {
+  const saveMetadata = async () => {
+    const savedProject = JSON.parse(localStorage.getItem('currentProject') || {});
+    savedProject.metadata = {
       title,
       description,
       tags,
       seoScore,
-      lastUpdated: new Date().toISOString()
+      lastUpdated: new Date().toISOString(),
+      episodeId
     };
-    localStorage.setItem('currentProject', JSON.stringify(projectData));
+    localStorage.setItem('currentProject', JSON.stringify(savedProject));
     setIsSaved(true);
     setTimeout(() => setIsSaved(false), 3000);
+
+    try {
+      // Save to Appwrite
+      const response = await databases.listDocuments(DATABASE_ID, COLLECTIONS.METADATA, [`equal("episode_id", "${episodeId}")`]);
+      const metadataDoc = response.documents[0];
+      if (metadataDoc) {
+        await databases.updateDocument(DATABASE_ID, COLLECTIONS.METADATA, metadataDoc.$id, {
+          episode_id: episodeId,
+          title,
+          description,
+          tags,
+          seo_score: seoScore,
+          last_updated: new Date().toISOString(),
+        });
+      } else {
+        await databases.createDocument(DATABASE_ID, COLLECTIONS.METADATA, ID.unique(), {
+          episode_id: episodeId,
+          title,
+          description,
+          tags,
+          seo_score: seoScore,
+          last_updated: new Date().toISOString(),
+        });
+      }
+    } catch (err) {
+      setError(`Failed to save to backend: ${err.message}. Saved locally.`);
+    }
   };
 
   const continueToNext = () => {
     saveMetadata();
-    navigate('/social-snippets');
+    if (!error) navigate('/social-snippets');
   };
 
   const goBack = () => {
-    navigate('/blog-editor');
+    saveMetadata();
+    if (!error) navigate('/blog-editor');
   };
 
   const getSeoColor = () => {
@@ -110,7 +171,6 @@ const Metadata = () => {
 
   return (
     <div className="metadata-container">
-      {/* Header with left title and right menu button */}
       <header className="mobile-header">
         <div className="header-content">
           <div className="navbar-title">
@@ -133,12 +193,19 @@ const Metadata = () => {
         <div className="glass-card">
           <header className="metadata-header">
             <h1 className="metadata-title">
-              <span className="gradient-text"><br></br><br></br>Metadata Optimization</span>
+              <span className="gradient-text">Metadata Optimization</span>
             </h1>
             <p className="metadata-subtitle">
               Enhance your content's visibility with optimized metadata
             </p>
           </header>
+
+          {error && (
+            <div className="error-message">
+              <p>{error}</p>
+              <button onClick={() => setError('')} className="close-error">Close</button>
+            </div>
+          )}
 
           <div className="metadata-grid">
             <div className="metadata-form">
@@ -146,9 +213,7 @@ const Metadata = () => {
                 <label className="input-label">
                   <FaHeading className="input-icon" />
                   <span>Meta Title</span>
-                  <span className="char-counter">
-                    {title.length}/60 (ideal: 50-60 chars)
-                  </span>
+                  <span className="char-counter">{title.length}/60 (ideal: 50-60 chars)</span>
                 </label>
                 <input
                   type="text"
@@ -164,9 +229,7 @@ const Metadata = () => {
                 <label className="input-label">
                   <FaAlignLeft className="input-icon" />
                   <span>Meta Description</span>
-                  <span className="char-counter">
-                    {description.length}/160 (ideal: 120-160 chars)
-                  </span>
+                  <span className="char-counter">{description.length}/160 (ideal: 120-160 chars)</span>
                 </label>
                 <textarea
                   className="input-field"
@@ -312,7 +375,7 @@ const Metadata = () => {
                 className="save-button"
                 onClick={saveMetadata}
               >
-                {isSaved ? 'Saved!' : 'Save Draft'}
+                {isSaved ? 'Saved!' : 'Save Draft'} <FaSave />
               </button>
               <button 
                 className="primary-button"

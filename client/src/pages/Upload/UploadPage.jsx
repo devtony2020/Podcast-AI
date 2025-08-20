@@ -14,7 +14,7 @@ import {
   FaBars,
   FaUpload
 } from 'react-icons/fa';
-import { transcribeFile, checkFileRequirements } from '../../api/mockApi';
+import axios from 'axios';
 import './upload.css';
 
 const Upload = () => {
@@ -38,54 +38,54 @@ const Upload = () => {
 
   const handleFiles = async (newFiles) => {
     if (newFiles.length === 0) return;
-    
-    try {
-      await checkFileRequirements(newFiles[0]);
-      setFiles([newFiles[0]]);
-      setError('');
-    } catch (err) {
-      setError(err.message);
+
+    const file = newFiles[0];
+    if (!['audio/mpeg', 'audio/wav', 'video/mp4', 'audio/m4a', 'audio/aac'].includes(file.type) || file.size > 2 * 1024 * 1024 * 1024) {
+      setError('Unsupported file type or size exceeds 2GB. Please use MP3, WAV, MP4, M4A, or AAC.');
       setFiles([]);
+      return;
     }
+    setFiles([file]);
+    setError('');
   };
 
   const processFile = async () => {
     if (files.length === 0) return;
-    
+
     setStatus('uploading');
     setProgress(0);
-    
+
     const uploadInterval = setInterval(() => {
-      setProgress(prev => {
-        if (prev >= 90) {
-          clearInterval(uploadInterval);
-          return 90;
-        }
-        return prev + 10;
-      });
+      setProgress(prev => (prev >= 90 ? (clearInterval(uploadInterval), 90) : prev + 10));
     }, 300);
 
     try {
-      setStatus('transcribing');
-      const result = await transcribeFile(files[0]);
-      
+      const formData = new FormData();
+      formData.append('file', files[0]);
+
+      const response = await axios.post(import.meta.env.VITE_BACKEND_URL + '/upload-and-process', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        onUploadProgress: (progressEvent) => {
+          const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+          setProgress(percentCompleted);
+        },
+      });
+
       clearInterval(uploadInterval);
       setProgress(100);
       setStatus('success');
-      
+
       localStorage.setItem('currentProject', JSON.stringify({
+        episodeId: response.data.episodeId,
         originalFile: files[0].name,
-        transcription: result.text,
-        segments: result.segments,
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
       }));
 
-      setTimeout(() => navigate('/blog'), 2000);
-      
+      setTimeout(() => navigate(`/blog/${response.data.episodeId}`), 2000);
     } catch (err) {
       clearInterval(uploadInterval);
       setStatus('error');
-      setError(err.message || 'Processing failed');
+      setError(err.message || 'Upload or processing failed. Check backend logs.');
     }
   };
 
@@ -98,25 +98,20 @@ const Upload = () => {
 
   return (
     <div className="upload-page">
-      {/* Header with left title and right menu button */}
       <header className="mobile-header">
         <div className="header-content">
           <div className="navbar-title">
             <FaUpload className="upload-icon" />
             <span>Upload</span>
           </div>
-          <button 
-            className="menu-toggle" 
-            onClick={() => setSidebarOpen(!sidebarOpen)}
-            aria-label="Toggle menu"
-          >
+          <button className="menu-toggle" onClick={() => setSidebarOpen(!sidebarOpen)} aria-label="Toggle menu">
             {sidebarOpen ? <FaTimes /> : <FaBars />}
           </button>
         </div>
       </header>
 
       <Sidebar isOpen={sidebarOpen} />
-      
+
       <main className={`upload-main ${sidebarOpen ? 'sidebar-active' : ''}`}>
         <div className="upload-container">
           <div className="upload-card">
@@ -131,41 +126,29 @@ const Upload = () => {
 
             <div className="features-grid">
               <div className="feature-card">
-                <div className="feature-icon">
-                  <FaMagic />
-                </div>
+                <div className="feature-icon"><FaMagic /></div>
                 <h3>AI-Powered</h3>
                 <p>Smart transcription with speaker detection</p>
               </div>
               <div className="feature-card">
-                <div className="feature-icon">
-                  <FaHeadphones />
-                </div>
+                <div className="feature-icon"><FaHeadphones /></div>
                 <h3>Multi-Format</h3>
                 <p>Supports MP3, WAV, MP4 and more</p>
               </div>
               <div className="feature-card">
-                <div className="feature-icon">
-                  <FaRegClock />
-                </div>
+                <div className="feature-icon"><FaRegClock /></div>
                 <h3>Fast Processing</h3>
                 <p>Get results in minutes, not hours</p>
               </div>
             </div>
 
-            <div 
-              className={`upload-zone ${error ? 'has-error' : ''} ${status === 'success' ? 'has-success' : ''}`}
-              onDrop={handleDrop}
-              onDragOver={(e) => e.preventDefault()}
-            >
+            <div className={`upload-zone ${error ? 'has-error' : ''} ${status === 'success' ? 'has-success' : ''}`} onDrop={handleDrop} onDragOver={(e) => e.preventDefault()}>
               {status === 'success' ? (
                 <div className="upload-success-content">
                   <FaCheckCircle size={48} className="success-icon" />
                   <h3>All Set! Your Content is Ready</h3>
                   <p>We're preparing your editor experience...</p>
-                  <div className="success-progress">
-                    <div className="progress-bar" style={{ width: `${progress}%` }}></div>
-                  </div>
+                  <div className="success-progress"><div className="progress-bar" style={{ width: `${progress}%` }}></div></div>
                 </div>
               ) : (
                 <>
@@ -178,13 +161,7 @@ const Upload = () => {
                   <span className="upload-or">or</span>
                   <label className="upload-label">
                     <span>Browse Files</span>
-                    <input 
-                      type="file" 
-                      accept=".mp3,.mp4,.wav,.m4a,.aac" 
-                      className="upload-input" 
-                      onChange={handleChange} 
-                      disabled={status !== 'idle'}
-                    />
+                    <input type="file" accept=".mp3,.mp4,.wav,.m4a,.aac" className="upload-input" onChange={handleChange} disabled={status !== 'idle'} />
                   </label>
                 </>
               )}
@@ -194,9 +171,7 @@ const Upload = () => {
               <div className="upload-message error">
                 <FaExclamationCircle />
                 <span>{error}</span>
-                <button className="dismiss-error" onClick={() => setError('')}>
-                  <FaTimes />
-                </button>
+                <button className="dismiss-error" onClick={() => setError('')}><FaTimes /></button>
               </div>
             )}
 
@@ -214,23 +189,12 @@ const Upload = () => {
               <div className="file-list">
                 <h2 className="file-list-title">Selected File</h2>
                 <div className="file-item">
-                  <div className="file-icon">
-                    <FaFileAudio />
-                  </div>
+                  <div className="file-icon"><FaFileAudio /></div>
                   <div className="file-info">
                     <span className="file-name">{files[0].name}</span>
-                    <span className="file-details">
-                      {(files[0].size / 1024 / 1024).toFixed(2)} MB • {files[0].type.split('/')[1].toUpperCase()}
-                    </span>
+                    <span className="file-details">{(files[0].size / 1024 / 1024).toFixed(2)} MB • {files[0].type.split('/')[1].toUpperCase()}</span>
                   </div>
-                  <button 
-                    className="remove-btn"
-                    onClick={removeFile}
-                    aria-label="Remove file"
-                    disabled={status !== 'idle'}
-                  >
-                    <FaTimes />
-                  </button>
+                  <button className="remove-btn" onClick={removeFile} aria-label="Remove file" disabled={status !== 'idle'}><FaTimes /></button>
                 </div>
               </div>
             )}
@@ -238,23 +202,14 @@ const Upload = () => {
             {progress > 0 && status !== 'success' && (
               <div className="progress-container">
                 <div className="progress-labels">
-                  <span>
-                    {status === 'uploading' ? 'Uploading...' : 
-                     status === 'transcribing' ? 'Processing...' : ''}
-                  </span>
+                  <span>{status === 'uploading' ? 'Uploading...' : status === 'transcribing' ? 'Processing...' : ''}</span>
                   <span>{progress}%</span>
                 </div>
-                <div className="progress-track">
-                  <div className="progress-bar" style={{ width: `${progress}%` }}></div>
-                </div>
+                <div className="progress-track"><div className="progress-bar" style={{ width: `${progress}%` }}></div></div>
               </div>
             )}
 
-            <button 
-              className={`upload-btn ${status !== 'idle' ? 'processing' : ''}`}
-              disabled={files.length === 0 || status !== 'idle'}
-              onClick={processFile}
-            >
+            <button className={`upload-btn ${status !== 'idle' ? 'processing' : ''}`} disabled={files.length === 0 || status !== 'idle'} onClick={processFile}>
               {status === 'idle' ? (
                 <>
                   <FaCloudUploadAlt />
@@ -263,11 +218,7 @@ const Upload = () => {
               ) : (
                 <>
                   <FaSpinner className="spinner" />
-                  <span>
-                    {status === 'uploading' ? 'Uploading...' : 
-                     status === 'transcribing' ? 'Transcribing...' : 
-                     'Preparing Editor...'}
-                  </span>
+                  <span>{status === 'uploading' ? 'Uploading...' : status === 'transcribing' ? 'Transcribing...' : 'Preparing Editor...'}</span>
                 </>
               )}
             </button>
