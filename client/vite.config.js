@@ -1,16 +1,13 @@
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
 
-export default defineConfig({
-  plugins: [react()],
+export default {
   server: {
-    port: 3000,
+    port: 5173,
     proxy: {
-      '/api': {
+      '/upload-and-process': {
         target: 'http://localhost:5000',
         changeOrigin: true,
-        secure: false,
-      },
-    },
-  },
-})
+        rewrite: (path) => path.replace(/^\/upload-and-process/, '/upload-and-process')
+      }
+    }
+  }
+};

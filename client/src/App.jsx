@@ -7,6 +7,7 @@ import BlogEditor from './pages/BlogEditor/BlogEditorPage';
 import Metadata from './pages/Metadata/MetadataPage';
 import SocialSnippets from './pages/SocialSnippets/SocialSnippetsPage';
 import Publishing from './pages/Publishing/PublishingPage';
+import HelpPage from './pages/Help/HelpPage';
 
 
 const App = () => {
@@ -16,10 +17,11 @@ const App = () => {
         <Route path="/" element={<LandingPage />} />
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/upload" element={<Upload />} />
-        <Route path="/blog" element={<BlogEditor />} />
+        <Route path="/blog/:episodeId" element={<BlogEditor />} />
         <Route path="/metadata" element={<Metadata />} />
         <Route path="/social" element={<SocialSnippets />} />
         <Route path="/publish" element={<Publishing />} />
+        <Route path="/help" element={<HelpPage />} />
       </Routes>
     </Router>
   );
