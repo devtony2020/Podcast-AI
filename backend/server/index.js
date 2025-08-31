@@ -1,11 +1,13 @@
 require('dotenv').config();
 const express = require('express');
-const { Client, Storage, Databases, ID } = require('node-appwrite');
+const { Client, Databases, ID } = require('node-appwrite');
 const OpenAI = require('openai');
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 const cors = require('cors');
+const https = require('https');
+const { URL } = require('url');
 
 const app = express();
 const upload = multer({ 
@@ -23,13 +25,12 @@ const upload = multer({
   }
 });
 
-// Initialize Appwrite client
+// Initialize Appwrite client (for database operations only)
 const client = new Client()
   .setEndpoint(process.env.APPWRITE_ENDPOINT)
   .setProject(process.env.APPWRITE_PROJECT_ID)
   .setKey(process.env.APPWRITE_API_KEY);
 
-const storage = new Storage(client);
 const databases = new Databases(client);
 const openai = process.env.OPENAI_KEY ? new OpenAI({ apiKey: process.env.OPENAI_KEY }) : null;
 
@@ -44,6 +45,84 @@ app.use(express.urlencoded({ extended: true }));
 // Create uploads directory if it doesn't exist
 if (!fs.existsSync('uploads')) {
   fs.mkdirSync('uploads');
+}
+
+// Direct Appwrite file upload using HTTP module (bypasses broken SDK)
+async function uploadToAppwriteDirect(filePath, fileName) {
+  return new Promise((resolve, reject) => {
+    console.log('📤 Direct upload started for:', fileName);
+    
+    try {
+      const fileData = fs.readFileSync(filePath);
+      const boundary = '----WebKitFormBoundary' + Math.random().toString(16).substr(2);
+      const fileId = ID.unique(); // Generate unique file ID
+      
+      // Build multipart form data manually
+      let body = '';
+      body += `--${boundary}\r\n`;
+      body += `Content-Disposition: form-data; name="fileId"\r\n\r\n`;
+      body += `${fileId}\r\n`;
+      body += `--${boundary}\r\n`;
+      body += `Content-Disposition: form-data; name="file"; filename="${fileName}"\r\n`;
+      body += 'Content-Type: application/octet-stream\r\n\r\n';
+      body += fileData;
+      body += `\r\n--${boundary}--\r\n`;
+      
+      const appwriteUrl = new URL(`${process.env.APPWRITE_ENDPOINT}/storage/buckets/${process.env.APPWRITE_STORAGE_BUCKET_ID || 'bytebao_storage'}/files`);
+      
+      const options = {
+        hostname: appwriteUrl.hostname,
+        port: appwriteUrl.port || 443,
+        path: appwriteUrl.pathname,
+        method: 'POST',
+        headers: {
+          'X-Appwrite-Project': process.env.APPWRITE_PROJECT_ID,
+          'X-Appwrite-Key': process.env.APPWRITE_API_KEY,
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
+          'Content-Length': Buffer.byteLength(body)
+        }
+      };
+      
+      const req = https.request(options, (res) => {
+        let data = '';
+        
+        res.on('data', (chunk) => {
+          data += chunk;
+        });
+        
+        res.on('end', () => {
+          console.log('📨 Appwrite response status:', res.statusCode);
+          
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            try {
+              const result = JSON.parse(data);
+              console.log('✅ Direct upload successful:', result.$id);
+              resolve(result);
+            } catch (parseError) {
+              console.error('❌ Parse error:', parseError);
+              reject(new Error(`Failed to parse response: ${parseError.message}`));
+            }
+          } else {
+            console.error('❌ Upload failed with status:', res.statusCode);
+            reject(new Error(`Upload failed: ${res.statusCode} - ${data}`));
+          }
+        });
+      });
+      
+      req.on('error', (error) => {
+        console.error('🔥 HTTP request error:', error);
+        reject(error);
+      });
+      
+      // Send the request
+      req.write(body);
+      req.end();
+      
+    } catch (error) {
+      console.error('🔥 Error in upload function:', error);
+      reject(error);
+    }
+  });
 }
 
 // Error handling middleware
@@ -77,7 +156,7 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Upload and process endpoint - FIXED FOR SDK 8.0.0
+// Upload and process endpoint - FIXED WITH DIRECT HTTP UPLOAD
 app.post('/upload-and-process', upload.single('file'), async (req, res) => {
   let filePath = null;
   
@@ -91,15 +170,11 @@ app.post('/upload-and-process', upload.single('file'), async (req, res) => {
     
     console.log('Processing file:', req.file.originalname, 'Size:', req.file.size);
 
-    // Upload file to Appwrite storage - FIXED FOR SDK 8.0.0
-    console.log('📤 Uploading to Appwrite...');
-    const uploadResult = await storage.createFile(
-      process.env.APPWRITE_STORAGE_BUCKET_ID || 'bytebao_storage', 
-      ID.unique(),
-      fs.readFileSync(filePath) // Use buffer with SDK 8.0.0
+    // Upload file to Appwrite using DIRECT HTTP (bypass broken SDK)
+    const uploadResult = await uploadToAppwriteDirect(
+      filePath, 
+      `${episodeId}_${req.file.originalname}`
     );
-
-    console.log('✅ File uploaded to Appwrite:', uploadResult.$id);
 
     const fileUrl = `${process.env.APPWRITE_ENDPOINT}/storage/buckets/${uploadResult.bucketId}/files/${uploadResult.$id}/view?project=${process.env.APPWRITE_PROJECT_ID}`;
 
@@ -358,5 +433,5 @@ app.listen(PORT, () => {
   console.log(`🤖 OpenAI configured: ${!!openai}`);
   console.log(`🌐 CORS enabled for: localhost:3000, localhost:5173, localhost:8080`);
   console.log(`🔧 Appwrite Project: ${process.env.APPWRITE_PROJECT_ID}`);
-  console.log(`📦 Using Appwrite SDK 8.0.0 (STABLE VERSION)`);
+  console.log(`📤 Using DIRECT HTTP upload (SDK bypassed)`);
 });

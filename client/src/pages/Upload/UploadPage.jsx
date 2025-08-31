@@ -278,7 +278,7 @@ const Upload = () => {
               {status === "idle" ? (
                 <>
                   <FaCloudUploadAlt />
-                  <span>Start Processing</span>
+                  <span>Transcribe & Generate Content</span>
                 </>
               ) : (
                 <>
