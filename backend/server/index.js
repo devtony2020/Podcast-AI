@@ -10,9 +10,9 @@ const https = require('https');
 const { URL } = require('url');
 
 const app = express();
-const upload = multer({ 
+const upload = multer({
   dest: 'uploads/',
-  limits: { 
+  limits: {
     fileSize: 30 * 1024 * 1024,
     files: 1
   },
@@ -25,7 +25,7 @@ const upload = multer({
   }
 });
 
-// Initialize Appwrite client (for database operations only)
+// ---------- Appwrite + OpenAI clients ----------
 const client = new Client()
   .setEndpoint(process.env.APPWRITE_ENDPOINT)
   .setProject(process.env.APPWRITE_PROJECT_ID)
@@ -34,11 +34,27 @@ const client = new Client()
 const databases = new Databases(client);
 const openai = process.env.OPENAI_KEY ? new OpenAI({ apiKey: process.env.OPENAI_KEY }) : null;
 
-// Middleware
+// ---------- Dynamic CORS ----------
+/*
+  Set CORS_ORIGINS in your Render / environment variables as a comma-separated list:
+  e.g. CORS_ORIGINS="http://localhost:3000,http://localhost:5173,https://your-frontend.onrender.com"
+*/
+const rawOrigins = process.env.CORS_ORIGINS || 'http://localhost:3000,http://localhost:5173,http://localhost:8080';
+const allowedOrigins = rawOrigins.split(',').map(s => s.trim()).filter(Boolean);
+
 app.use(cors({
-  origin: ['http://localhost:3000', 'http://localhost:5173', 'http://localhost:8080'],
+  origin: function(origin, callback) {
+    // allow requests with no origin (like mobile apps, curl, server-to-server)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      return callback(null, true);
+    } else {
+      return callback(new Error('CORS policy: This origin is not allowed: ' + origin));
+    }
+  },
   credentials: true
 }));
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -47,29 +63,29 @@ if (!fs.existsSync('uploads')) {
   fs.mkdirSync('uploads');
 }
 
-// Direct Appwrite file upload using HTTP module (bypasses broken SDK)
+// ---------- Direct Appwrite file upload using HTTP module (bypasses SDK) ----------
 async function uploadToAppwriteDirect(filePath, fileName) {
   return new Promise((resolve, reject) => {
     console.log('📤 Direct upload started for:', fileName);
-    
+
     try {
       const fileData = fs.readFileSync(filePath);
       const boundary = '----WebKitFormBoundary' + Math.random().toString(16).substr(2);
-      const fileId = ID.unique(); // Generate unique file ID
-      
-      // Build multipart form data manually
-      let body = '';
-      body += `--${boundary}\r\n`;
-      body += `Content-Disposition: form-data; name="fileId"\r\n\r\n`;
-      body += `${fileId}\r\n`;
-      body += `--${boundary}\r\n`;
-      body += `Content-Disposition: form-data; name="file"; filename="${fileName}"\r\n`;
-      body += 'Content-Type: application/octet-stream\r\n\r\n';
-      body += fileData;
-      body += `\r\n--${boundary}--\r\n`;
-      
+      const fileId = ID.unique();
+
+      let bodyBufferParts = [];
+      bodyBufferParts.push(Buffer.from(`--${boundary}\r\n`));
+      bodyBufferParts.push(Buffer.from(`Content-Disposition: form-data; name="fileId"\r\n\r\n`));
+      bodyBufferParts.push(Buffer.from(`${fileId}\r\n`));
+      bodyBufferParts.push(Buffer.from(`--${boundary}\r\n`));
+      bodyBufferParts.push(Buffer.from(`Content-Disposition: form-data; name="file"; filename="${fileName}"\r\n`));
+      bodyBufferParts.push(Buffer.from('Content-Type: application/octet-stream\r\n\r\n'));
+      bodyBufferParts.push(Buffer.from(fileData));
+      bodyBufferParts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
+
+      const body = Buffer.concat(bodyBufferParts);
       const appwriteUrl = new URL(`${process.env.APPWRITE_ENDPOINT}/storage/buckets/${process.env.APPWRITE_STORAGE_BUCKET_ID || 'bytebao_storage'}/files`);
-      
+
       const options = {
         hostname: appwriteUrl.hostname,
         port: appwriteUrl.port || 443,
@@ -79,20 +95,20 @@ async function uploadToAppwriteDirect(filePath, fileName) {
           'X-Appwrite-Project': process.env.APPWRITE_PROJECT_ID,
           'X-Appwrite-Key': process.env.APPWRITE_API_KEY,
           'Content-Type': `multipart/form-data; boundary=${boundary}`,
-          'Content-Length': Buffer.byteLength(body)
+          'Content-Length': body.length
         }
       };
-      
+
       const req = https.request(options, (res) => {
         let data = '';
-        
+
         res.on('data', (chunk) => {
           data += chunk;
         });
-        
+
         res.on('end', () => {
           console.log('📨 Appwrite response status:', res.statusCode);
-          
+
           if (res.statusCode >= 200 && res.statusCode < 300) {
             try {
               const result = JSON.parse(data);
@@ -103,21 +119,20 @@ async function uploadToAppwriteDirect(filePath, fileName) {
               reject(new Error(`Failed to parse response: ${parseError.message}`));
             }
           } else {
-            console.error('❌ Upload failed with status:', res.statusCode);
+            console.error('❌ Upload failed with status:', res.statusCode, data);
             reject(new Error(`Upload failed: ${res.statusCode} - ${data}`));
           }
         });
       });
-      
+
       req.on('error', (error) => {
         console.error('🔥 HTTP request error:', error);
         reject(error);
       });
-      
-      // Send the request
+
       req.write(body);
       req.end();
-      
+
     } catch (error) {
       console.error('🔥 Error in upload function:', error);
       reject(error);
@@ -125,41 +140,39 @@ async function uploadToAppwriteDirect(filePath, fileName) {
   });
 }
 
-// Error handling middleware
+// ---------- Error handling middleware ----------
 app.use((err, req, res, next) => {
   if (err instanceof multer.MulterError) {
-    if (req.file && req.file.path) {
+    if (req.file && req.file.path && fs.existsSync(req.file.path)) {
       fs.unlinkSync(req.file.path);
     }
-    return res.status(400).json({ 
-      success: false, 
-      error: err.code === 'LIMIT_FILE_SIZE' 
-        ? 'File size exceeds 30MB limit' 
-        : 'File upload error' 
+    return res.status(400).json({
+      success: false,
+      error: err.code === 'LIMIT_FILE_SIZE' ? 'File size exceeds 30MB limit' : 'File upload error'
     });
   }
-  
-  console.error('Error:', err.message);
-  res.status(500).json({ success: false, error: 'Server error' });
+
+  console.error('Error:', err && err.message ? err.message : err);
+  res.status(500).json({ success: false, error: err && err.message ? err.message : 'Server error' });
 });
 
-// Health check endpoint
+// ---------- Health check ----------
 app.get('/health', (req, res) => {
-  res.json({ 
-    success: true, 
-    message: 'Server is running', 
+  res.json({
+    success: true,
+    message: 'Server is running',
     timestamp: new Date().toISOString(),
     services: {
-      appwrite: true,
+      appwrite: !!process.env.APPWRITE_PROJECT_ID,
       openai: !!openai
     }
   });
 });
 
-// Upload and process endpoint - FIXED WITH DIRECT HTTP UPLOAD
+// ---------- Upload and process endpoint ----------
 app.post('/upload-and-process', upload.single('file'), async (req, res) => {
   let filePath = null;
-  
+
   try {
     if (!req.file) {
       return res.status(400).json({ success: false, error: 'No file uploaded' });
@@ -167,38 +180,36 @@ app.post('/upload-and-process', upload.single('file'), async (req, res) => {
 
     filePath = req.file.path;
     const episodeId = ID.unique();
-    
+
     console.log('Processing file:', req.file.originalname, 'Size:', req.file.size);
 
-    // Upload file to Appwrite using DIRECT HTTP (bypass broken SDK)
+    // Upload file to Appwrite using direct HTTP
     const uploadResult = await uploadToAppwriteDirect(
-      filePath, 
+      filePath,
       `${episodeId}_${req.file.originalname}`
     );
 
     const fileUrl = `${process.env.APPWRITE_ENDPOINT}/storage/buckets/${uploadResult.bucketId}/files/${uploadResult.$id}/view?project=${process.env.APPWRITE_PROJECT_ID}`;
 
-    // Create transcript document
+    // Create transcript document (quick fix: only Appwrite-safe fields)
     const transcriptDoc = await databases.createDocument(
-      process.env.APPWRITE_DATABASE_ID || 'bytebao_db', 
-      'transcripts', 
-      ID.unique(), 
+      process.env.APPWRITE_DATABASE_ID || 'bytebao_db',
+      'transcripts',
+      ID.unique(),
       {
         episode_id: episodeId,
         transcript_text: 'Transcription in progress...',
         upload_date: new Date().toISOString(),
-        file_name: req.file.originalname,
-        file_size: req.file.size,
-        mime_type: req.file.mimetype,
-        appwrite_file_id: uploadResult.$id
+        appwrite_file_id: uploadResult.$id,
+        file_url: fileUrl
       }
     );
 
     // Create publish queue entry
     await databases.createDocument(
       process.env.APPWRITE_DATABASE_ID || 'bytebao_db',
-      'publish_queue', 
-      ID.unique(), 
+      'publish_queue',
+      ID.unique(),
       {
         episode_id: episodeId,
         status: 'draft',
@@ -207,36 +218,42 @@ app.post('/upload-and-process', upload.single('file'), async (req, res) => {
       }
     );
 
-    // Process with OpenAI if available
+    // Process with OpenAI if configured
     if (openai) {
       try {
         console.log('Starting OpenAI transcription...');
-        
-        const transcription = await openai.audio.transcriptions.create({
+
+        const transcriptionResponse = await openai.audio.transcriptions.create({
           file: fs.createReadStream(filePath),
           model: 'whisper-1',
           response_format: 'text'
         });
-        
-        const transcriptText = transcription;
-        console.log('Transcription completed, length:', transcriptText.length);
 
+        // transcriptionResponse may be a string or object depending on the SDK - handle both
+        const transcriptText = typeof transcriptionResponse === 'string'
+          ? transcriptionResponse
+          : (transcriptionResponse.text || transcriptionResponse);
+
+        console.log('Transcription completed, length:', transcriptText ? transcriptText.length : 0);
+
+        // Update transcript doc with real transcript
         await databases.updateDocument(
           process.env.APPWRITE_DATABASE_ID || 'bytebao_db',
-          'transcripts', 
-          transcriptDoc.$id, 
+          'transcripts',
+          transcriptDoc.$id,
           { transcript_text: transcriptText }
         );
 
-        const generationPrompt = `From this podcast transcript: "${transcriptText}" 
-        Generate a JSON object with these fields:
-        - blog_post: A well-structured SEO-optimized blog post (800-1200 words)
-        - seo_title: An engaging SEO title under 60 characters
-        - meta_description: Compelling meta description under 160 characters  
-        - tags: 5-7 relevant tags as an array
-        - twitter_snippet: Engaging tweet under 280 characters
-        - instagram_caption: Instagram caption with 3-5 relevant hashtags
-        - linkedin_intro: Professional LinkedIn introduction (2-3 paragraphs)`;
+        // Prepare prompt for content generation
+        const generationPrompt = `From this podcast transcript: "${transcriptText}"
+Generate a JSON object with these fields:
+- blog_post: A well-structured SEO-optimized blog post (800-1200 words)
+- seo_title: An engaging SEO title under 60 characters
+- meta_description: Compelling meta description under 160 characters
+- tags: 5-7 relevant tags as an array
+- twitter_snippet: Engaging tweet under 280 characters
+- instagram_caption: Instagram caption with 3-5 relevant hashtags
+- linkedin_intro: Professional LinkedIn introduction (2-3 paragraphs)`;
 
         console.log('Generating blog content with GPT...');
         const response = await openai.chat.completions.create({
@@ -246,14 +263,23 @@ app.post('/upload-and-process', upload.single('file'), async (req, res) => {
           max_tokens: 2500
         });
 
-        const generated = JSON.parse(response.choices[0].message.content);
+        // Parse generated JSON safely
+        let generated = {};
+        try {
+          generated = JSON.parse(response.choices[0].message.content);
+        } catch (parseErr) {
+          console.warn('Warning: failed to parse GPT response as JSON, falling back to raw content', parseErr);
+          // if parsing fails, attempt to use the raw content as blog_post
+          generated.blog_post = response.choices[0].message.content || '';
+        }
+
         console.log('Content generation completed');
 
         // Create blog post
         await databases.createDocument(
           process.env.APPWRITE_DATABASE_ID || 'bytebao_db',
-          'blog_posts', 
-          ID.unique(), 
+          'blog_posts',
+          ID.unique(),
           {
             episode_id: episodeId,
             blog_content: generated.blog_post || '',
@@ -267,8 +293,8 @@ app.post('/upload-and-process', upload.single('file'), async (req, res) => {
         // Create social snippets
         await databases.createDocument(
           process.env.APPWRITE_DATABASE_ID || 'bytebao_db',
-          'snippets', 
-          ID.unique(), 
+          'snippets',
+          ID.unique(),
           {
             episode_id: episodeId,
             twitter_snippet: generated.twitter_snippet || '',
@@ -280,13 +306,20 @@ app.post('/upload-and-process', upload.single('file'), async (req, res) => {
 
       } catch (openaiError) {
         console.error('OpenAI processing error:', openaiError);
-        await databases.updateDocument(
-          process.env.APPWRITE_DATABASE_ID || 'bytebao_db',
-          'transcripts', 
-          transcriptDoc.$id, 
-          { transcript_text: 'OpenAI processing failed: ' + openaiError.message }
-        );
+        // update transcript doc with failure note
+        try {
+          await databases.updateDocument(
+            process.env.APPWRITE_DATABASE_ID || 'bytebao_db',
+            'transcripts',
+            transcriptDoc.$id,
+            { transcript_text: 'OpenAI processing failed: ' + (openaiError.message || openaiError) }
+          );
+        } catch (updErr) {
+          console.error('Failed to update transcript doc after OpenAI error:', updErr);
+        }
       }
+    } else {
+      console.log('OpenAI not configured; skipping transcription/generation step.');
     }
 
     // Clean up uploaded file
@@ -294,99 +327,97 @@ app.post('/upload-and-process', upload.single('file'), async (req, res) => {
       fs.unlinkSync(filePath);
       console.log('Temporary file cleaned up');
     }
-    
-    res.json({ 
-      success: true, 
-      episodeId, 
+
+    res.json({
+      success: true,
+      episodeId,
       fileUrl,
       message: openai ? 'File processed successfully' : 'File uploaded but OpenAI not configured'
     });
-    
+
   } catch (error) {
     console.error('Upload error:', error);
-    
     if (filePath && fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
+      try { fs.unlinkSync(filePath); } catch (e) { /* ignore */ }
     }
-    
-    res.status(500).json({ 
-      success: false, 
-      error: error.message || 'Server error during processing' 
+    res.status(500).json({
+      success: false,
+      error: error && error.message ? error.message : 'Server error during processing'
     });
   }
 });
 
-// Get data endpoint
+// ---------- Get data endpoint ----------
 app.get('/get-data/:episodeId', async (req, res) => {
   try {
     const { episodeId } = req.params;
-    
+
     const [blog, snippets, transcript] = await Promise.all([
       databases.listDocuments(
-        process.env.APPWRITE_DATABASE_ID || 'bytebao_db', 
-        'blog_posts', 
+        process.env.APPWRITE_DATABASE_ID || 'bytebao_db',
+        'blog_posts',
         [`equal("episode_id","${episodeId}")`]
       ),
       databases.listDocuments(
-        process.env.APPWRITE_DATABASE_ID || 'bytebao_db', 
-        'snippets', 
+        process.env.APPWRITE_DATABASE_ID || 'bytebao_db',
+        'snippets',
         [`equal("episode_id","${episodeId}")`]
       ),
       databases.listDocuments(
-        process.env.APPWRITE_DATABASE_ID || 'bytebao_db', 
-        'transcripts', 
+        process.env.APPWRITE_DATABASE_ID || 'bytebao_db',
+        'transcripts',
         [`equal("episode_id","${episodeId}")`]
       )
     ]);
 
-    res.json({ 
-      success: true, 
-      blog: blog.documents[0] || null, 
+    res.json({
+      success: true,
+      blog: blog.documents[0] || null,
       snippets: snippets.documents[0] || null,
       transcript: transcript.documents[0] || null
     });
-    
+
   } catch (error) {
     console.error('Get data error:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message || 'Server error fetching data' 
+    res.status(500).json({
+      success: false,
+      error: error && error.message ? error.message : 'Server error fetching data'
     });
   }
 });
 
-// Enhance blog endpoint
+// ---------- Enhance blog endpoint ----------
 app.post('/enhance-blog/:episodeId', async (req, res) => {
   try {
     if (!openai) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'OpenAI key not configured' 
+      return res.status(400).json({
+        success: false,
+        error: 'OpenAI key not configured'
       });
     }
 
     const { episodeId } = req.params;
     const blogResponse = await databases.listDocuments(
       process.env.APPWRITE_DATABASE_ID || 'bytebao_db',
-      'blog_posts', 
+      'blog_posts',
       [`equal("episode_id","${episodeId}")`]
     );
-    
+
     const blog = blogResponse.documents[0];
 
     if (!blog || !blog.blog_content) {
-      return res.status(404).json({ 
-        success: false, 
-        error: 'Blog not found' 
+      return res.status(404).json({
+        success: false,
+        error: 'Blog not found'
       });
     }
 
-    const prompt = `Enhance this blog post for better SEO and engagement: "${blog.blog_content}" 
-    Generate a JSON object with these fields:
-    - enhanced_blog_post: Improved version of the blog (more engaging, better structure)
-    - improved_seo_title: Better SEO title under 60 characters  
-    - improved_meta_description: Better meta description under 160 characters
-    - updated_tags: Updated relevant tags as an array`;
+    const prompt = `Enhance this blog post for better SEO and engagement: "${blog.blog_content}"
+Generate a JSON object with these fields:
+- enhanced_blog_post: Improved version of the blog (more engaging, better structure)
+- improved_seo_title: Better SEO title under 60 characters
+- improved_meta_description: Better meta description under 160 characters
+- updated_tags: Updated relevant tags as an array`;
 
     const response = await openai.chat.completions.create({
       model: 'gpt-4o',
@@ -399,8 +430,8 @@ app.post('/enhance-blog/:episodeId', async (req, res) => {
 
     await databases.updateDocument(
       process.env.APPWRITE_DATABASE_ID || 'bytebao_db',
-      'blog_posts', 
-      blog.$id, 
+      'blog_posts',
+      blog.$id,
       {
         blog_content: enhanced.enhanced_blog_post || blog.blog_content,
         seo_title: enhanced.improved_seo_title || blog.seo_title,
@@ -410,28 +441,28 @@ app.post('/enhance-blog/:episodeId', async (req, res) => {
       }
     );
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       episodeId,
       message: 'Blog enhanced successfully'
     });
-    
+
   } catch (error) {
     console.error('Enhance blog error:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message || 'Server error enhancing blog' 
+    res.status(500).json({
+      success: false,
+      error: error && error.message ? error.message : 'Server error enhancing blog'
     });
   }
 });
 
-// Start server
+// ---------- Start server ----------
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Backend server running on http://localhost:${PORT}`);
   console.log(`📁 Upload directory: ${path.join(process.cwd(), 'uploads')}`);
   console.log(`🤖 OpenAI configured: ${!!openai}`);
-  console.log(`🌐 CORS enabled for: localhost:3000, localhost:5173, localhost:8080`);
+  console.log(`🌐 CORS allowed origins: ${allowedOrigins.join(', ')}`);
   console.log(`🔧 Appwrite Project: ${process.env.APPWRITE_PROJECT_ID}`);
   console.log(`📤 Using DIRECT HTTP upload (SDK bypassed)`);
 });

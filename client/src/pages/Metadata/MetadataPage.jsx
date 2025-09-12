@@ -33,14 +33,12 @@ const Metadata = () => {
   const [error, setError] = useState('');
   const [episodeId, setEpisodeId] = useState('');
 
-  // Load or initialize metadata
   useEffect(() => {
     const savedProject = JSON.parse(localStorage.getItem('currentProject') || '{}');
     const currentEpisodeId = savedProject.episodeId;
 
     if (currentEpisodeId) {
       setEpisodeId(currentEpisodeId);
-      // Attempt to fetch from backend
       axios.get(`${import.meta.env.VITE_BACKEND_URL}/get-data/${currentEpisodeId}`)
         .then(response => {
           const { metadata } = response.data;
@@ -48,54 +46,42 @@ const Metadata = () => {
             setTitle(metadata.title || '');
             setDescription(metadata.description || '');
             setTags(metadata.tags || []);
-          } else {
-            // Fallback to localStorage
-            setTitle(savedProject.title || 'New Podcast Episode');
-            setDescription(savedProject.description || 'Discover this exciting new podcast episode...');
-            setTags(savedProject.tags || savedProject.keywords || ['podcast']);
           }
         })
         .catch(err => {
-          setError(`Backend fetch failed: ${err.message}. Using local defaults.`);
-          setTitle(savedProject.title || 'New Podcast Episode');
-          setDescription(savedProject.description || 'Discover this exciting new podcast episode...');
-          setTags(savedProject.tags || savedProject.keywords || ['podcast']);
+          setError(`Failed to fetch metadata: ${err.message}. Using local data.`);
         });
     } else {
-      // New session: generate temporary episodeId and default values
-      const tempEpisodeId = ID.unique();
-      setEpisodeId(tempEpisodeId);
-      setTitle('New Podcast Episode');
-      setDescription('Discover this exciting new podcast episode...');
-      setTags(['podcast']);
+      setEpisodeId(ID.unique());
     }
 
-    // Set suggested tags
-    setSuggestedTags([
-      'content creation',
-      'seo',
-      'blogging',
-      'audio content'
-    ].filter(tag => !tags.includes(tag)));
+    // Fetch suggested tags dynamically (e.g., from an API)
+    axios.get(`${import.meta.env.VITE_BACKEND_URL}/suggested-tags`)
+      .then(response => {
+        setSuggestedTags(response.data.tags || []);
+      })
+      .catch(() => {
+        setSuggestedTags([]);
+      });
   }, []);
 
-  // Calculate SEO score
   useEffect(() => {
     const score = Math.min(100, 
       (title.length > 10 && title.length <= 60 ? 30 : Math.max(0, title.length * 0.5)) +
       (description.length > 50 && description.length <= 160 ? 30 : Math.max(0, description.length * 0.2)) +
       (tags.length >= 3 ? 20 : Math.min(20, tags.length * 5)) +
-      (tags.some(tag => title.includes(tag)) ? 10 : 0) +
-      (tags.some(tag => description.includes(tag)) ? 10 : 0)
+      (tags.some(tag => title.toLowerCase().includes(tag)) ? 10 : 0) +
+      (tags.some(tag => description.toLowerCase().includes(tag)) ? 10 : 0)
     );
     setSeoScore(Math.round(score));
   }, [title, description, tags]);
 
   const addTag = (e) => {
     if ((e.key === 'Enter' || e.type === 'click') && tagInput.trim() && !tags.includes(tagInput.trim().toLowerCase()) && tags.length < 10) {
-      setTags([...tags, tagInput.trim().toLowerCase()]);
+      const newTag = tagInput.trim().toLowerCase();
+      setTags([...tags, newTag]);
       setTagInput('');
-      setSuggestedTags(suggestedTags.filter(tag => tag !== tagInput.trim().toLowerCase()));
+      setSuggestedTags(suggestedTags.filter(tag => tag !== newTag));
     }
   };
 
@@ -112,6 +98,11 @@ const Metadata = () => {
   };
 
   const saveMetadata = async () => {
+    if (!title.trim() || !description.trim()) {
+      setError('Title and description cannot be empty.');
+      return;
+    }
+
     const savedProject = JSON.parse(localStorage.getItem('currentProject') || {});
     savedProject.metadata = {
       title,
@@ -126,27 +117,21 @@ const Metadata = () => {
     setTimeout(() => setIsSaved(false), 3000);
 
     try {
-      // Save to Appwrite
       const response = await databases.listDocuments(DATABASE_ID, COLLECTIONS.METADATA, [`equal("episode_id", "${episodeId}")`]);
       const metadataDoc = response.documents[0];
+      const documentData = {
+        episode_id: episodeId,
+        title,
+        description,
+        tags,
+        seo_score: seoScore,
+        last_updated: new Date().toISOString(),
+      };
+
       if (metadataDoc) {
-        await databases.updateDocument(DATABASE_ID, COLLECTIONS.METADATA, metadataDoc.$id, {
-          episode_id: episodeId,
-          title,
-          description,
-          tags,
-          seo_score: seoScore,
-          last_updated: new Date().toISOString(),
-        });
+        await databases.updateDocument(DATABASE_ID, COLLECTIONS.METADATA, metadataDoc.$id, documentData);
       } else {
-        await databases.createDocument(DATABASE_ID, COLLECTIONS.METADATA, ID.unique(), {
-          episode_id: episodeId,
-          title,
-          description,
-          tags,
-          seo_score: seoScore,
-          last_updated: new Date().toISOString(),
-        });
+        await databases.createDocument(DATABASE_ID, COLLECTIONS.METADATA, ID.unique(), documentData);
       }
     } catch (err) {
       setError(`Failed to save to backend: ${err.message}. Saved locally.`);
@@ -155,7 +140,7 @@ const Metadata = () => {
 
   const continueToNext = () => {
     saveMetadata();
-    if (!error) navigate('/social-snippets');
+    if (!error) navigate('/social');
   };
 
   const goBack = () => {
@@ -163,37 +148,31 @@ const Metadata = () => {
     if (!error) navigate('/blog-editor');
   };
 
-  const getSeoColor = () => {
-    if (seoScore >= 80) return '#4CAF50';
-    if (seoScore >= 50) return '#FFC107';
-    return '#F44336';
-  };
-
   return (
     <div className="metadata-container">
       <header className="mobile-header">
         <div className="header-content">
           <div className="navbar-title">
-            <FaHome className="home-icon" />
+            <FaHome className="home-icon" aria-hidden="true" />
             <span>Metadata</span>
           </div>
           <button 
             className="menu-toggle" 
             onClick={() => setSidebarOpen(!sidebarOpen)}
-            aria-label="Toggle menu"
+            aria-label="Toggle navigation menu"
           >
-            {sidebarOpen ? <FaTimes /> : <FaTags />}
+            {sidebarOpen ? <FaTimes aria-hidden="true" /> : <FaTags aria-hidden="true" />}
           </button>
         </div>
       </header>
 
-      <Sidebar isOpen={sidebarOpen} />
+      <Sidebar isOpen={sidebarOpen} toggleSidebar={() => setSidebarOpen(false)} />
       
       <div className={`metadata-content ${sidebarOpen ? 'sidebar-active' : ''}`}>
         <div className="glass-card">
           <header className="metadata-header">
             <h1 className="metadata-title">
-              <span className="gradient-text">Metadata Optimization</span>
+              Metadata Optimization
             </h1>
             <p className="metadata-subtitle">
               Enhance your content's visibility with optimized metadata
@@ -201,65 +180,79 @@ const Metadata = () => {
           </header>
 
           {error && (
-            <div className="error-message">
-              <p>{error}</p>
-              <button onClick={() => setError('')} className="close-error">Close</button>
+            <div className="error-message" role="alert">
+              <FaExclamationCircle aria-hidden="true" />
+              <span>{error}</span>
+              <button 
+                onClick={() => setError('')} 
+                className="close-error" 
+                aria-label="Dismiss error message"
+              >
+                <FaTimes aria-hidden="true" />
+              </button>
             </div>
           )}
 
           <div className="metadata-grid">
             <div className="metadata-form">
               <div className="meta-field">
-                <label className="input-label">
-                  <FaHeading className="input-icon" />
+                <label className="input-label" htmlFor="meta-title">
+                  <FaHeading className="input-icon" aria-hidden="true" />
                   <span>Meta Title</span>
                   <span className="char-counter">{title.length}/60 (ideal: 50-60 chars)</span>
                 </label>
                 <input
+                  id="meta-title"
                   type="text"
                   className="input-field"
                   value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  placeholder="A compelling title that includes primary keywords"
+                  onChange={(e) => setTitle(e.target.value.trimStart())}
+                  placeholder="Enter a compelling title"
                   maxLength="60"
+                  aria-label="Meta title (50-60 characters)"
                 />
               </div>
 
               <div className="meta-field">
-                <label className="input-label">
-                  <FaAlignLeft className="input-icon" />
+                <label className="input-label" htmlFor="meta-description">
+                  <FaAlignLeft className="input-icon" aria-hidden="true" />
                   <span>Meta Description</span>
                   <span className="char-counter">{description.length}/160 (ideal: 120-160 chars)</span>
                 </label>
                 <textarea
+                  id="meta-description"
                   className="input-field"
                   value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  placeholder="An engaging summary that encourages clicks"
+                  onChange={(e) => setDescription(e.target.value.trimStart())}
+                  placeholder="Enter an engaging summary"
                   maxLength="160"
                   rows="4"
+                  aria-label="Meta description (120-160 characters)"
                 />
               </div>
 
               <div className="meta-field">
-                <label className="input-label">
-                  <FaPlus className="input-icon" />
+                <label className="input-label" htmlFor="tag-input">
+                  <FaPlus className="input-icon" aria-hidden="true" />
                   <span>Tags</span>
                   <span className="char-counter">{tags.length}/10 max</span>
                 </label>
                 <div className="tag-input-container">
                   <input
+                    id="tag-input"
                     type="text"
                     className="input-field"
                     value={tagInput}
-                    onChange={(e) => setTagInput(e.target.value)}
+                    onChange={(e) => setTagInput(e.target.value.trimStart())}
                     onKeyDown={addTag}
                     placeholder="Add tag and press Enter"
+                    aria-label="Add a tag (press Enter to submit)"
                   />
                   <button 
                     onClick={addTag}
                     className="add-tag-button"
                     disabled={!tagInput.trim() || tags.length >= 10}
+                    aria-label="Add tag"
                   >
                     Add
                   </button>
@@ -273,9 +266,9 @@ const Metadata = () => {
                         <button 
                           onClick={() => removeTag(tag)}
                           className="tag-remove"
-                          aria-label={`Remove ${tag}`}
+                          aria-label={`Remove tag ${tag}`}
                         >
-                          <FaTrashAlt size={12} />
+                          <FaTrashAlt size={12} aria-hidden="true" />
                         </button>
                       </span>
                     ))}
@@ -287,26 +280,26 @@ const Metadata = () => {
             <div className="metadata-sidebar">
               <div className="seo-score-card">
                 <div className="score-header">
-                  <FaChartLine className="score-icon" />
+                  <FaChartLine className="score-icon" aria-hidden="true" />
                   <h3>SEO Score</h3>
                 </div>
                 <div 
                   className="score-circle"
                   style={{ 
-                    background: `conic-gradient(${getSeoColor()} 0% ${seoScore}%, rgba(255,255,255,0.1) ${seoScore}% 100%)`
+                    '--seoScore': `${seoScore}%`
                   }}
                 >
                   <div className="score-value">{seoScore}%</div>
                 </div>
                 <div className="score-description">
-                  {seoScore >= 80 ? 'Excellent!' : 
-                   seoScore >= 50 ? 'Good, but could improve' : 
+                  {seoScore >= 80 ? 'Excellent' : 
+                   seoScore >= 50 ? 'Good' : 
                    'Needs work'}
                 </div>
 
                 <div className="seo-tips">
                   <div className="tips-header">
-                    <FaLightbulb className="tips-icon" />
+                    <FaLightbulb className="tips-icon" aria-hidden="true" />
                     <h4>Optimization Tips</h4>
                   </div>
                   <ul className="tips-list">
@@ -334,7 +327,7 @@ const Metadata = () => {
                         Add more tags (3-5 recommended)
                       </li>
                     )}
-                    {tags.length > 0 && !title.includes(tags[0]) && (
+                    {tags.length > 0 && !title.toLowerCase().includes(tags[0]) && (
                       <li className="tip-item">
                         <span className="tip-badge">!</span>
                         Include primary tag in title
@@ -352,6 +345,7 @@ const Metadata = () => {
                           key={index}
                           className="suggested-tag"
                           onClick={() => addSuggestedTag(tag)}
+                          aria-label={`Add suggested tag ${tag}`}
                         >
                           {tag}
                         </button>
@@ -367,21 +361,24 @@ const Metadata = () => {
             <button 
               className="secondary-button"
               onClick={goBack}
+              aria-label="Go back to editor"
             >
-              <FaArrowLeft /> Back to Editor
+              <FaArrowLeft aria-hidden="true" /> Back to Editor
             </button>
             <div className="action-group">
               <button 
                 className="save-button"
                 onClick={saveMetadata}
+                aria-label={isSaved ? 'Draft saved' : 'Save draft'}
               >
-                {isSaved ? 'Saved!' : 'Save Draft'} <FaSave />
+                {isSaved ? 'Saved!' : 'Save Draft'} <FaSave aria-hidden="true" />
               </button>
               <button 
                 className="primary-button"
                 onClick={continueToNext}
+                aria-label="Continue to social snippets"
               >
-                Continue <FaArrowRight />
+                Continue <FaArrowRight aria-hidden="true" />
               </button>
             </div>
           </div>

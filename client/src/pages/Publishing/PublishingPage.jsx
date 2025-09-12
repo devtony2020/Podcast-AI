@@ -161,7 +161,6 @@ const Publishing = () => {
         ]);
         setScheduledContent(scheduled);
         setAnalytics(analytics);
-      // eslint-disable-next-line no-unused-vars
       } catch (error) {
         setModalMessage('Failed to load data. Please try again.');
         setShowModal(true);
@@ -191,17 +190,6 @@ const Publishing = () => {
 
     // Show auth dialog
     setAuthPlatform(platform);
-    
-    // In a real app, you would open the OAuth window here
-    // const width = 600, height = 700;
-    // const left = (window.innerWidth - width) / 2;
-    // const top = (window.innerHeight - height) / 2;
-    // const authWin = window.open(
-    //   platformAuthUrls[platform],
-    //   `${platform}Auth`,
-    //   `toolbar=no, location=no, directories=no, status=no, menubar=no, scrollbars=no, resizable=no, copyhistory=no, width=${width}, height=${height}, top=${top}, left=${left}`
-    // );
-    // setAuthWindow(authWin);
     
     // For this demo, we'll simulate successful auth after a delay
     setTimeout(() => {
@@ -300,7 +288,6 @@ const Publishing = () => {
         recurrence: 'weekly'
       });
 
-    // eslint-disable-next-line no-unused-vars
     } catch (error) {
       setModalMessage('Error scheduling content. Please try again.');
       setShowModal(true);
@@ -314,7 +301,11 @@ const Publishing = () => {
   };
 
   const goBack = () => {
-    navigate('/social-snippets');
+    navigate('/social');
+  };
+
+  const goToAnalytics = () => {
+    navigate('/dashboard');
   };
 
   const getStatusBadge = (status) => {
@@ -650,9 +641,12 @@ const Publishing = () => {
             >
               <FaArrowLeft /> Back to Social Snippets
             </button>
-            <div className="analytics-badge">
+            <button 
+              className="primary-button analytics-btn"
+              onClick={goToAnalytics}
+            >
               <FaChartLine /> Publishing Analytics
-            </div>
+            </button>
           </div>
         </div>
 
