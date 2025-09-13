@@ -87,11 +87,11 @@ const Upload = () => {
       setProgress(100);
       setStatus("success");
 
+      // ✅ Removed `originalFile`
       localStorage.setItem(
         "currentProject",
         JSON.stringify({
           episodeId: result.episodeId,
-          originalFile: files[0].name,
           createdAt: new Date().toISOString(),
           fileUrl: result.fileUrl,
         })
