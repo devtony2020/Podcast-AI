@@ -20,7 +20,7 @@ const upload = multer({
     if (file.mimetype.startsWith('audio/') || file.mimetype.startsWith('video/')) {
       cb(null, true);
     } else {
-      cb(new Error('Only audio and video files are allowed'), false);
+      cb(new Error('Only audio and video files are allowed!'), false);
     }
   }
 });
